@@ -1,0 +1,6 @@
+numpy
+scipy
+noisereduce
+pyaudio
+webrtcvad
+setuptools<82.0.0
