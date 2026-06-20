@@ -23,7 +23,10 @@ HARDWARE_CHUNK = int(HARDWARE_RATE * FRAME_DURATION / 1000)
 VAD_CHUNK = int(VAD_RATE * FRAME_DURATION / 1000)
 
 VAD_AGGRESSIVENESS = 3 
-SILENCE_TIMEOUT = 2.0 
+# Wait 8 full seconds of absolute silence before saving
+SILENCE_TIMEOUT = 8.0 
+# Force-save and start a new file after 5 minutes (300s) max
+MAX_RECORDING_DURATION = 300.0
 
 # Initialize VAD and PyAudio
 vad = webrtcvad.Vad(VAD_AGGRESSIVENESS)
@@ -90,43 +93,55 @@ try:
             silence_start_time = None
             recording_frames.append(frame_data) # Keep the original high-quality audio
             print(".", end="", flush=True)
-            
+
+
         else:
             if is_recording:
                 recording_frames.append(frame_data)
-                
+
                 if silence_start_time is None:
                     silence_start_time = time.time()
-                
-                if time.time() - silence_start_time >= SILENCE_TIMEOUT:
-                    print(f"\n🤫 Silence detected. Processing audio...")
-                    
+
+                # Calculate total recording time so far
+                total_recording_time = len(recording_frames) * (FRAME_DURATION / 1000.0)
+
+                # Condition: Trigger file save if they stopped talking OR if the file hit the max size limit
+                reached_timeout = time.time() - silence_start_time >= SILENCE_TIMEOUT
+                reached_max_limit = total_recording_time >= MAX_RECORDING_DURATION
+
+                if reached_timeout or reached_max_limit:
+                    if reached_max_limit:
+                        print(f"\n🛑 Reached max file duration cap ({MAX_RECORDING_DURATION}s). Splitting file...")
+                    else:
+                        print(f"\n🤫 Silence detected for {SILENCE_TIMEOUT}s. Processing audio...")
+
                     raw_audio = b"".join(recording_frames)
                     audio_np = np.frombuffer(raw_audio, dtype=np.int16)
-                    
-                    # Optional: Amplification boost for far away voice capture
-                    boost_factor = 2.0
+
+                    # Optional: Amplification boost for clear room pickup
+                    boost_factor = 2.5
                     audio_np = np.clip(audio_np * boost_factor, -32768, 32767).astype(np.int16)
-                    
+
                     print("✨ Running digital noise filter...")
                     cleaned_audio_np = nr.reduce_noise(y=audio_np, sr=HARDWARE_RATE, stationary=True)
                     cleaned_audio_np = np.clip(cleaned_audio_np, -32768, 32767).astype(np.int16)
-                    
+
                     timestamp = time.strftime("%Y%m%d-%H%M%S")
-                    filename = f"record_{timestamp}.wav"
-                    
+                    filename = f"./recordings/record_{timestamp}.wav"
+
                     with wave.open(filename, 'wb') as wf:
                         wf.setnchannels(CHANNELS)
                         wf.setsampwidth(audio_interface.get_sample_size(FORMAT))
                         wf.setframerate(HARDWARE_RATE)
                         wf.writeframes(cleaned_audio_np.tobytes())
-                        
+
                     print(f"💾 Saved cleanly as: {filename}\n")
                     print("Listening for human speech...")
-                    
+
                     is_recording = False
                     recording_frames = []
                     silence_start_time = None
+            
 
 except KeyboardInterrupt:
     print("\nShutting down recorder cleanly.")
